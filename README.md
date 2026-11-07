@@ -109,3 +109,17 @@ python tests/interop.py build/filecrypter2
 fixed salt and nonce only for a deterministic test vector; production encryption
 always generates fresh random values. Tests also simulate a write failure under
 POSIX and assert that the original survives and the incomplete output is removed.
+
+To reproduce the memory and undefined-behavior checks with GCC or Clang:
+
+```sh
+cmake -S . -B build-sanitize -DFILECRYPTER_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-sanitize
+ctest --test-dir build-sanitize --output-on-failure
+```
+
+The Linux CI runs these checks automatically in addition to the normal build.
+The platform matrix builds and tests on Linux, macOS and Windows. The Windows
+runner uses its preinstalled OpenSSL; vcpkg remains a supported local setup.
+A standalone installation can be created with
+`cmake --install build --config Release --prefix /your/install/prefix`.
