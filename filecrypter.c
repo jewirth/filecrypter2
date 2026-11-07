@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #ifdef _WIN32
 #include <io.h>
+#include <windows.h>
 #else
 #include <unistd.h>
 #endif
@@ -34,6 +35,36 @@ static FILE *create_output(const char *path)
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/crypto.h>
+
+/* Windows tmpfile() may require root-directory write access. Use the user's
+ * temp directory, exclusive creation and automatic deletion instead. */
+static FILE *private_temp(void)
+{
+#ifdef _WIN32
+    char directory[MAX_PATH], path[MAX_PATH], suffix[33];
+    unsigned char random[16];
+    HANDLE handle;
+    int fd;
+    FILE *file;
+    DWORD length = GetTempPathA(MAX_PATH, directory);
+    if (!length || length >= MAX_PATH || RAND_bytes(random, sizeof random) != 1)
+        return NULL;
+    for (size_t i = 0; i < sizeof random; ++i)
+        snprintf(suffix + i * 2, 3, "%02x", random[i]);
+    if (snprintf(path, sizeof path, "%sfilecrypter2-%s.tmp", directory, suffix) >= MAX_PATH)
+        return NULL;
+    handle = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_NEW,
+                         FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, NULL);
+    if (handle == INVALID_HANDLE_VALUE) return NULL;
+    fd = _open_osfhandle((intptr_t)handle, _O_RDWR | _O_BINARY);
+    if (fd < 0) { CloseHandle(handle); return NULL; }
+    file = _fdopen(fd, "w+b");
+    if (!file) _close(fd);
+    return file;
+#else
+    return tmpfile();
+#endif
+}
 
 #define CHUNK 65536
 #define HEADER 36
@@ -120,10 +151,11 @@ static int copy(FILE *in, FILE *out)
 {
     unsigned char buffer[CHUNK];
     size_t n;
+    int ok = 1;
     while ((n = fread(buffer, 1, sizeof buffer, in)) != 0)
-        if (!put(out, buffer, n)) return 0;
+        if (!put(out, buffer, n)) { ok = 0; break; }
     OPENSSL_cleanse(buffer, sizeof buffer);
-    return !ferror(in);
+    return ok && !ferror(in);
 }
 
 static void usage(FILE *stream)
@@ -183,7 +215,7 @@ int main(int argc, char **argv)
     }
     if (strcmp(argv[base], argv[base + 1]) == 0) goto done;
     if (decrypt) {
-        plain = tmpfile();
+        plain = private_temp();
         if (!plain || !crypt(in, plain, password, 1, digest) ||
             fflush(plain) != 0 || fseek(plain, 0, SEEK_SET) != 0) goto done;
         out = create_output(argv[base + 1]);
@@ -195,7 +227,7 @@ int main(int argc, char **argv)
             !crypt(out, NULL, password, 1, verified) ||
             CRYPTO_memcmp(digest, verified, sizeof digest) != 0) goto done;
     }
-    if (fflush(out) != 0) goto done;
+    if (decrypt && fflush(out) != 0) goto done;
     ok = 1;
 done:
     if (plain && fclose(plain) != 0) ok = 0;
