@@ -16,12 +16,12 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 PASSWORD = 'independent interop password'
 PLAINTEXT = bytes(range(256)) + b'\x00\r\nfilecrypter2\n'
-HEADER = b'FCRYPT2\x01' + bytes(range(16)) + bytes(range(16, 28))
+HEADER = b'FCRYPT2\x02' + bytes(range(16)) + bytes(range(16, 28))
 
 
 def derive(header):
     return hashlib.scrypt(PASSWORD.encode(), salt=header[8:24],
-                          n=32768, r=8, p=1, maxmem=64*1024*1024, dklen=32)
+                          n=32768 if header[7] == 1 else 131072, r=8, p=1, maxmem=256*1024*1024, dklen=32)
 
 
 def fixture():
@@ -44,7 +44,7 @@ if __name__ == '__main__':
                 subprocess.run([exe, str(src), str(enc), PASSWORD], check=True)
                 encrypted = enc.read_bytes()
                 header = encrypted[:36]
-                assert header[:8] == b'FCRYPT2\x01'
+                assert header[:8] == b'FCRYPT2\x02'
                 decoded = AESGCM(derive(header)).decrypt(header[24:36], encrypted[36:], header)
                 assert decoded == data
         print('Independent AES-GCM/scrypt interoperability checks passed.')

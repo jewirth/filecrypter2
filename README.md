@@ -60,12 +60,16 @@ The literal password `-` is reserved for stdin mode.
 
 ## Format and security
 
-Version 1 uses OpenSSL AES-256-GCM, a random 16-byte salt and 12-byte nonce.
-The key is derived with scrypt (N=32768, r=8, p=1; about 32 MiB working memory).
-Format: 8 bytes `FCRYPT2` followed by version byte 1, 16-byte salt, 12-byte nonce,
+New files use format version 2 with OpenSSL AES-256-GCM, a random 16-byte salt and 12-byte nonce.
+The key is derived with scrypt (N=131072, r=8, p=1; about 128 MiB working memory).
+This increases the KDF work factor fourfold over the initial format. Decryption
+also accepts version 1 (N=32768); encrypt again to migrate an older file.
+Format: 8-byte magic (`FCRYPT2` plus version byte 2), 16-byte salt, 12-byte nonce,
 ciphertext, 16-byte authentication tag. The complete 36-byte header is GCM
 associated data. KDF parameters are fixed by the version, never file-controlled.
 The seven ASCII characters plus version byte make up the eight-byte magic.
+Unknown versions are rejected; the version byte is authenticated with the header.
+Only regular files are accepted; pipes, devices and directories are rejected.
 Files larger than 32 GiB of plaintext are rejected to remain below GCM limits.
 Memory consumption stays bounded as file size grows.
 
@@ -88,3 +92,20 @@ new output; originals and existing destinations are never intentionally changed.
 Weak passwords remain susceptible to offline guessing. Filenames, sizes and
 filesystem metadata are not hidden. The original XOR format is incompatible.
 This is a small implementation with regression tests, not an independent audit.
+
+
+## Independent format checks
+
+The regular regression suite decrypts fixed version 1 and version 2 fixtures
+produced independently with Python hashlib.scrypt and cryptography AESGCM.
+For an additional independent check of C-produced ciphertext, install the
+optional development dependency `cryptography` in a virtual environment and run:
+
+```sh
+python tests/interop.py build/filecrypter2
+```
+
+`python tests/interop.py --fixture` regenerates the version 2 fixture. It uses
+fixed salt and nonce only for a deterministic test vector; production encryption
+always generates fresh random values. Tests also simulate a write failure under
+POSIX and assert that the original survives and the incomplete output is removed.

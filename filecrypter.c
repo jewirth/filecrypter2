@@ -108,7 +108,7 @@ static FILE *private_temp(void)
 #define CHUNK 65536
 #define HEADER 36
 #define TAG 16
-static const unsigned char magic[8] = {'F','C','R','Y','P','T','2',1};
+static const unsigned char magic[8] = {'F','C','R','Y','P','T','2',2};
 
 static int put(FILE *out, const unsigned char *data, size_t n)
 {
@@ -130,14 +130,16 @@ static int process_stream(FILE *in, FILE *out, const char *password, int decrypt
     if (!ctx || !md) goto done;
     if (decrypt) {
         if (fread(header, 1, HEADER, in) != HEADER ||
-            memcmp(header, magic, sizeof magic) != 0) goto done;
+            memcmp(header, magic, 7) != 0 ||
+            (header[7] != 1 && header[7] != 2)) goto done;
     } else {
         memcpy(header, magic, sizeof magic);
         if (RAND_bytes(header + 8, 28) != 1) goto done;
     }
     /* Fixed versioned KDF parameters prevent attacker-controlled resource costs. */
     if (EVP_PBE_scrypt(password, strlen(password), header + 8, 16,
-                       32768, 8, 1, 64 * 1024 * 1024, key, sizeof key) != 1 ||
+                       header[7] == 1 ? 32768 : 131072, 8, 1,
+                       256 * 1024 * 1024, key, sizeof key) != 1 ||
         EVP_DigestInit_ex(md, EVP_sha256(), NULL) != 1 ||
         EVP_CipherInit_ex(ctx, EVP_aes_256_gcm(), NULL, key, header + 24, !decrypt) != 1 ||
         EVP_CipherUpdate(ctx, NULL, &count, header, HEADER) != 1) goto done;

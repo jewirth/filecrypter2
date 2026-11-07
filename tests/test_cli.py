@@ -55,7 +55,7 @@ class CLI(unittest.TestCase):
         self.assertFalse(out.exists())
         original = enc.read_bytes()
         variants = [original[:n] for n in (0, 7, 35, 36, 51, 52, 65536, len(original)-1)]
-        variants += [original+b'x']
+        variants += [original+b'x', original[:7]+b'\xff'+original[8:]]
         for offset in (0, 8, 24, 36, len(original)-1):
             damaged = bytearray(original)
             damaged[offset] ^= 1
@@ -106,12 +106,14 @@ class CLI(unittest.TestCase):
             self.assertFalse(out.exists())
 
     def test_independently_generated_format_fixture(self):
-        fixture_path = Path(__file__).parent/'fixtures'/'v1.json'
-        fixture = json.loads(fixture_path.read_text())
-        enc, out = self.root/'fixture.enc', self.root/'fixture.out'
-        enc.write_bytes(base64.b64decode(fixture['ciphertext_base64']))
-        self.run_cli('--decrypt', enc, out, fixture['password'])
-        self.assertEqual(out.read_bytes(), base64.b64decode(fixture['plaintext_base64']))
+        for version in (1, 2):
+            with self.subTest(version=version):
+                fixture_path = Path(__file__).parent/'fixtures'/f'v{version}.json'
+                fixture = json.loads(fixture_path.read_text())
+                enc, out = self.root/f'fixture{version}.enc', self.root/f'fixture{version}.out'
+                enc.write_bytes(base64.b64decode(fixture['ciphertext_base64']))
+                self.run_cli('--decrypt', enc, out, fixture['password'])
+                self.assertEqual(out.read_bytes(), base64.b64decode(fixture['plaintext_base64']))
 
     @unittest.skipIf(os.name == 'nt', 'requires POSIX file-size limits')
     def test_write_failure_removes_incomplete_output(self):
