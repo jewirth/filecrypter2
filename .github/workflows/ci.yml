@@ -1,5 +1,8 @@
 name: build-and-test
 on: [push, pull_request]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
@@ -9,6 +12,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Install OpenSSL (Linux)
@@ -28,3 +32,9 @@ jobs:
         run: cmake -S . -B build
       - run: cmake --build build --config Release
       - run: ctest --test-dir build -C Release --output-on-failure
+      - name: Check memory and undefined behavior (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cmake -S . -B build-sanitize -DFILECRYPTER_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build-sanitize
+          ctest --test-dir build-sanitize --output-on-failure
