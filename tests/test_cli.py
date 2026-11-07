@@ -1,5 +1,7 @@
 """Black-box security and round-trip regression tests; no third-party packages."""
 import os
+import base64
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -102,6 +104,14 @@ class CLI(unittest.TestCase):
                 stream.truncate((1 << 35) + 1)
             self.run_cli(sparse, out, 'pw', success=False)
             self.assertFalse(out.exists())
+
+    def test_independently_generated_format_fixture(self):
+        fixture_path = Path(__file__).parent/'fixtures'/'v1.json'
+        fixture = json.loads(fixture_path.read_text())
+        enc, out = self.root/'fixture.enc', self.root/'fixture.out'
+        enc.write_bytes(base64.b64decode(fixture['ciphertext_base64']))
+        self.run_cli('--decrypt', enc, out, fixture['password'])
+        self.assertEqual(out.read_bytes(), base64.b64decode(fixture['plaintext_base64']))
 
     def test_password_stdin(self):
         src, enc, dst = [self.root/n for n in ('src', 'enc', 'dst')]
