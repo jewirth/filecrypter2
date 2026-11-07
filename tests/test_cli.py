@@ -85,6 +85,24 @@ class CLI(unittest.TestCase):
             self.run_cli(src, link, 'pw', success=False)
             self.assertEqual(src.read_bytes(), b'original')
 
+    def test_reject_special_and_oversized_inputs(self):
+        out = self.root/'out'
+        self.run_cli(self.root, out, 'pw', success=False)
+        self.assertFalse(out.exists())
+        if os.name != 'nt':
+            fifo = self.root/'fifo'
+            os.mkfifo(fifo)
+            result = subprocess.run([EXE, str(fifo), str(out), 'pw'],
+                                    capture_output=True, timeout=3)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(b'Usage:', result.stderr)
+            self.run_cli('/dev/null', out, 'pw', success=False)
+            sparse = self.root/'oversized'
+            with sparse.open('wb') as stream:
+                stream.truncate((1 << 35) + 1)
+            self.run_cli(sparse, out, 'pw', success=False)
+            self.assertFalse(out.exists())
+
     def test_password_stdin(self):
         src, enc, dst = [self.root/n for n in ('src', 'enc', 'dst')]
         src.write_bytes(b'private')

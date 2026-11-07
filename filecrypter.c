@@ -4,14 +4,56 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <openssl/evp.h>
+#include <openssl/rand.h>
+#include <openssl/crypto.h>
 #ifdef _WIN32
 #include <io.h>
 #include <windows.h>
 #else
 #include <unistd.h>
 #endif
+
+#define MAX_PLAINTEXT UINT64_C(34359738368)
+#define FORMAT_OVERHEAD 52
+
+/* Validate an opened descriptor, not a path that could change before opening.
+ * Nonblocking open prevents FIFOs from hanging before their type is checked. */
+static FILE *open_input(const char *path, int decrypt)
+{
+    int fd;
+    FILE *file;
+    uint64_t limit = MAX_PLAINTEXT + (decrypt ? FORMAT_OVERHEAD : 0);
+#ifdef _WIN32
+    struct _stat64 info;
+    fd = _open(path, _O_RDONLY | _O_BINARY);
+    if (fd < 0) return NULL;
+    if (_fstat64(fd, &info) != 0 || (info.st_mode & _S_IFMT) != _S_IFREG) {
+        _close(fd); errno = EINVAL; return NULL;
+    }
+    if (info.st_size < 0 || (uint64_t)info.st_size > limit) {
+        _close(fd); errno = EFBIG; return NULL;
+    }
+    file = _fdopen(fd, "rb");
+    if (!file) _close(fd);
+#else
+    struct stat info;
+    fd = open(path, O_RDONLY | O_NONBLOCK);
+    if (fd < 0) return NULL;
+    if (fstat(fd, &info) != 0 || !S_ISREG(info.st_mode)) {
+        close(fd); errno = EINVAL; return NULL;
+    }
+    if (info.st_size < 0 || (uint64_t)info.st_size > limit) {
+        close(fd); errno = EFBIG; return NULL;
+    }
+    file = fdopen(fd, "rb");
+    if (!file) close(fd);
+#endif
+    return file;
+}
 
 /* Exclusive creation also rejects symlinks and input/output hardlink aliases. */
 static FILE *create_output(const char *path)
@@ -32,9 +74,6 @@ static FILE *create_output(const char *path)
 #endif
     return file;
 }
-#include <openssl/evp.h>
-#include <openssl/rand.h>
-#include <openssl/crypto.h>
 
 /* Windows tmpfile() may require root-directory write access. Use the user's
  * temp directory, exclusive creation and automatic deletion instead. */
@@ -109,7 +148,7 @@ static int process_stream(FILE *in, FILE *out, const char *password, int decrypt
         if (ferror(in) || (decrypt && n < TAG)) goto done;
         if (amount) {
             /* Stay below GCM's per-nonce message bound (2^39 - 256 bits). */
-            if (processed + amount > UINT64_C(34359738368)) goto done;
+            if (processed + amount > MAX_PLAINTEXT) goto done;
             processed += amount;
             if (EVP_CipherUpdate(ctx, output, &count, input, (int)amount) != 1 ||
                 EVP_DigestUpdate(md, decrypt ? output : input, amount) != 1 ||
@@ -206,7 +245,7 @@ int main(int argc, char **argv)
         }
         password = secret;
     }
-    in = fopen(argv[base], "rb");
+    in = open_input(argv[base], decrypt);
     if (!in) {
         OPENSSL_cleanse(secret, sizeof secret);
         perror("Error opening input");
