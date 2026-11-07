@@ -215,6 +215,7 @@ int main(int argc, char **argv)
     const char *password;
     unsigned char digest[32], verified[32];
     int ok = 0;
+    const char *error = "File operation failed.";
     if (argc == 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
         usage(stdout);
         return 0;
@@ -252,29 +253,55 @@ int main(int argc, char **argv)
         usage(stderr);
         return 1;
     }
-    if (strcmp(argv[base], argv[base + 1]) == 0) goto done;
+    if (strcmp(argv[base], argv[base + 1]) == 0) {
+        error = "Input and output must differ.";
+        goto done;
+    }
     if (decrypt) {
         plain = private_temp();
-        if (!plain || !process_stream(in, plain, password, 1, digest) ||
-            fflush(plain) != 0 || fseek(plain, 0, SEEK_SET) != 0) goto done;
+        error = "Cannot create a private temporary file.";
+        if (!plain) goto done;
+        error = "Decryption failed: wrong password, damaged file, or input/output error.";
+        if (!process_stream(in, plain, password, 1, digest)) goto done;
+        error = "Cannot prepare temporary plaintext for copying.";
+        if (fflush(plain) != 0 || fseek(plain, 0, SEEK_SET) != 0) goto done;
+        error = "Cannot create output: it must not exist and its directory must be writable.";
         out = create_output(argv[base + 1]);
-        if (!out || !copy(plain, out)) goto done;
+        if (!out) goto done;
+        error = "Cannot write decrypted output.";
+        if (!copy(plain, out)) goto done;
     } else {
+        error = "Cannot create output: it must not exist and its directory must be writable.";
         out = create_output(argv[base + 1]);
-        if (!out || !process_stream(in, out, password, 0, digest) ||
-            fflush(out) != 0 || fseek(out, 0, SEEK_SET) != 0 ||
-            !process_stream(out, NULL, password, 1, verified) ||
+        if (!out) goto done;
+        error = "Encryption failed: cryptographic operation or file read/write failed.";
+        if (!process_stream(in, out, password, 0, digest)) goto done;
+        error = "Cannot flush or rewind encrypted output for verification.";
+        if (fflush(out) != 0 || fseek(out, 0, SEEK_SET) != 0) goto done;
+        error = "Encryption verification failed: output is not correctly decryptable.";
+        if (!process_stream(out, NULL, password, 1, verified) ||
             CRYPTO_memcmp(digest, verified, sizeof digest) != 0) goto done;
     }
+    error = "Cannot flush decrypted output.";
     if (decrypt && fflush(out) != 0) goto done;
     ok = 1;
 done:
-    if (plain && fclose(plain) != 0) ok = 0;
-    if (out && fclose(out) != 0) ok = 0;
-    if (fclose(in) != 0) ok = 0;
+    if (plain && fclose(plain) != 0) {
+        if (ok) error = "Cannot close temporary plaintext.";
+        ok = 0;
+    }
+    if (out && fclose(out) != 0) {
+        if (ok) error = "Cannot close output.";
+        ok = 0;
+    }
+    if (fclose(in) != 0) {
+        if (ok) error = "Cannot close input.";
+        ok = 0;
+    }
     if (!ok) {
-        if (out) remove(argv[base + 1]);
-        fputs("Error: file operation failed, invalid format, wrong password or damaged ciphertext.\n", stderr);
+        if (out && remove(argv[base + 1]) != 0)
+            perror("Error removing incomplete output");
+        fprintf(stderr, "Error: %s\n", error);
         usage(stderr);
     }
     OPENSSL_cleanse(secret, sizeof secret);

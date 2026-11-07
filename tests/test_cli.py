@@ -113,6 +113,29 @@ class CLI(unittest.TestCase):
         self.run_cli('--decrypt', enc, out, fixture['password'])
         self.assertEqual(out.read_bytes(), base64.b64decode(fixture['plaintext_base64']))
 
+    @unittest.skipIf(os.name == 'nt', 'requires POSIX file-size limits')
+    def test_write_failure_removes_incomplete_output(self):
+        import resource
+        import signal
+        src, out = self.root/'src', self.root/'out'
+        src.write_bytes(os.urandom(4096))
+        def limit_output():
+            signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+            resource.setrlimit(resource.RLIMIT_FSIZE, (1024, 1024))
+        result = subprocess.run([EXE, str(src), str(out), 'pw'], capture_output=True,
+                                preexec_fn=limit_output, timeout=5)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b'Usage:', result.stderr)
+        self.assertFalse(out.exists())
+        self.assertEqual(src.stat().st_size, 4096)
+
+    def test_missing_output_directory(self):
+        src = self.root/'src'
+        src.write_bytes(b'data')
+        result = self.run_cli(src, self.root/'missing'/'out', 'pw', success=False)
+        self.assertIn(b'Cannot create output', result.stderr)
+        self.assertEqual(src.read_bytes(), b'data')
+
     def test_password_stdin(self):
         src, enc, dst = [self.root/n for n in ('src', 'enc', 'dst')]
         src.write_bytes(b'private')
