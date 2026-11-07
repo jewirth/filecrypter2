@@ -77,7 +77,7 @@ static int put(FILE *out, const unsigned char *data, size_t n)
 }
 
 /* The final 16 bytes are retained until EOF so truncation cannot be accepted. */
-static int crypt(FILE *in, FILE *out, const char *password, int decrypt,
+static int process_stream(FILE *in, FILE *out, const char *password, int decrypt,
                  unsigned char digest[32])
 {
     unsigned char header[HEADER], key[32] = {0};
@@ -216,15 +216,15 @@ int main(int argc, char **argv)
     if (strcmp(argv[base], argv[base + 1]) == 0) goto done;
     if (decrypt) {
         plain = private_temp();
-        if (!plain || !crypt(in, plain, password, 1, digest) ||
+        if (!plain || !process_stream(in, plain, password, 1, digest) ||
             fflush(plain) != 0 || fseek(plain, 0, SEEK_SET) != 0) goto done;
         out = create_output(argv[base + 1]);
         if (!out || !copy(plain, out)) goto done;
     } else {
         out = create_output(argv[base + 1]);
-        if (!out || !crypt(in, out, password, 0, digest) ||
+        if (!out || !process_stream(in, out, password, 0, digest) ||
             fflush(out) != 0 || fseek(out, 0, SEEK_SET) != 0 ||
-            !crypt(out, NULL, password, 1, verified) ||
+            !process_stream(out, NULL, password, 1, verified) ||
             CRYPTO_memcmp(digest, verified, sizeof digest) != 0) goto done;
     }
     if (decrypt && fflush(out) != 0) goto done;
