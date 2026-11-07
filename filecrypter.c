@@ -104,7 +104,7 @@ int main(int argc, char **argv)
     int decrypt = argc > 1 && strcmp(argv[1], "--decrypt") == 0;
     int base = decrypt ? 2 : 1;
     FILE *in, *out = NULL, *plain = NULL;
-    unsigned char digest[32];
+    unsigned char digest[32], verified[32];
     int ok = 0;
     if (argc == 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
         usage(stdout);
@@ -132,7 +132,10 @@ int main(int argc, char **argv)
         if (!out || !copy(plain, out)) goto done;
     } else {
         out = fopen(argv[base + 1], "w+b");
-        if (!out || !crypt(in, out, argv[base + 2], 0, digest)) goto done;
+        if (!out || !crypt(in, out, argv[base + 2], 0, digest) ||
+            fflush(out) != 0 || fseek(out, 0, SEEK_SET) != 0 ||
+            !crypt(out, NULL, argv[base + 2], 1, verified) ||
+            CRYPTO_memcmp(digest, verified, sizeof digest) != 0) goto done;
     }
     if (fflush(out) != 0) goto done;
     ok = 1;
