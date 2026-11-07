@@ -1,5 +1,36 @@
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
+/* Exclusive creation also rejects symlinks and input/output hardlink aliases. */
+static FILE *create_output(const char *path)
+{
+    int fd;
+    FILE *file;
+#ifdef _WIN32
+    fd = _open(path, _O_CREAT | _O_EXCL | _O_RDWR | _O_BINARY,
+               _S_IREAD | _S_IWRITE);
+    if (fd < 0) return NULL;
+    file = _fdopen(fd, "w+b");
+    if (!file) { _close(fd); remove(path); }
+#else
+    fd = open(path, O_CREAT | O_EXCL | O_RDWR, S_IRUSR | S_IWUSR);
+    if (fd < 0) return NULL;
+    file = fdopen(fd, "w+b");
+    if (!file) { close(fd); remove(path); }
+#endif
+    return file;
+}
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/crypto.h>
@@ -23,6 +54,7 @@ static int crypt(FILE *in, FILE *out, const char *password, int decrypt,
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     EVP_MD_CTX *md = EVP_MD_CTX_new();
     size_t n;
+    uint64_t processed = 0;
     int count = 0, ok = 0;
     unsigned int digest_len;
     if (!ctx || !md) goto done;
@@ -45,6 +77,9 @@ static int crypt(FILE *in, FILE *out, const char *password, int decrypt,
         size_t amount = decrypt ? (n > TAG ? n - TAG : 0) : n;
         if (ferror(in) || (decrypt && n < TAG)) goto done;
         if (amount) {
+            /* Stay below GCM's per-nonce message bound (2^39 - 256 bits). */
+            if (processed + amount > UINT64_C(34359738368)) goto done;
+            processed += amount;
             if (EVP_CipherUpdate(ctx, output, &count, input, (int)amount) != 1 ||
                 EVP_DigestUpdate(md, decrypt ? output : input, amount) != 1 ||
                 !put(out, output, (size_t)count)) goto done;
@@ -96,6 +131,7 @@ static void usage(FILE *stream)
     fputs("Usage: filecrypter2 [--decrypt] INPUT OUTPUT PASSWORD\n"
           "       filecrypter2 --help\n"
           "Encrypt by default; --decrypt decrypts a filecrypter2 file.\n"
+          "Use PASSWORD - to read a password line from stdin.\n"
           "Use a long, unique password. Existing output files are refused.\n", stream);
 }
 
@@ -104,6 +140,8 @@ int main(int argc, char **argv)
     int decrypt = argc > 1 && strcmp(argv[1], "--decrypt") == 0;
     int base = decrypt ? 2 : 1;
     FILE *in, *out = NULL, *plain = NULL;
+    char secret[1024] = {0};
+    const char *password;
     unsigned char digest[32], verified[32];
     int ok = 0;
     if (argc == 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
@@ -117,8 +155,28 @@ int main(int argc, char **argv)
         usage(stderr);
         return 1;
     }
+    password = argv[base + 2];
+    if (strcmp(password, "-") == 0) {
+        size_t length;
+        if (!fgets(secret, sizeof secret, stdin) ||
+            !(length = strlen(secret)) || secret[length - 1] != '\n') {
+            fputs("Error: stdin password must be a nonempty line shorter than 1023 bytes.\n", stderr);
+            OPENSSL_cleanse(secret, sizeof secret);
+            usage(stderr);
+            return 1;
+        }
+        secret[--length] = 0;
+        if (length && secret[length - 1] == '\r') secret[--length] = 0;
+        if (!length) {
+            OPENSSL_cleanse(secret, sizeof secret);
+            usage(stderr);
+            return 1;
+        }
+        password = secret;
+    }
     in = fopen(argv[base], "rb");
     if (!in) {
+        OPENSSL_cleanse(secret, sizeof secret);
         perror("Error opening input");
         usage(stderr);
         return 1;
@@ -126,15 +184,15 @@ int main(int argc, char **argv)
     if (strcmp(argv[base], argv[base + 1]) == 0) goto done;
     if (decrypt) {
         plain = tmpfile();
-        if (!plain || !crypt(in, plain, argv[base + 2], 1, digest) ||
+        if (!plain || !crypt(in, plain, password, 1, digest) ||
             fflush(plain) != 0 || fseek(plain, 0, SEEK_SET) != 0) goto done;
-        out = fopen(argv[base + 1], "w+b");
+        out = create_output(argv[base + 1]);
         if (!out || !copy(plain, out)) goto done;
     } else {
-        out = fopen(argv[base + 1], "w+b");
-        if (!out || !crypt(in, out, argv[base + 2], 0, digest) ||
+        out = create_output(argv[base + 1]);
+        if (!out || !crypt(in, out, password, 0, digest) ||
             fflush(out) != 0 || fseek(out, 0, SEEK_SET) != 0 ||
-            !crypt(out, NULL, argv[base + 2], 1, verified) ||
+            !crypt(out, NULL, password, 1, verified) ||
             CRYPTO_memcmp(digest, verified, sizeof digest) != 0) goto done;
     }
     if (fflush(out) != 0) goto done;
@@ -148,5 +206,6 @@ done:
         fputs("Error: file operation failed, invalid format, wrong password or damaged ciphertext.\n", stderr);
         usage(stderr);
     }
+    OPENSSL_cleanse(secret, sizeof secret);
     return ok ? 0 : 1;
 }
