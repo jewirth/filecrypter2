@@ -11,3 +11,10 @@ else()
   target_compile_options(filecrypter2 PRIVATE -Wall -Wextra -Wpedantic -Wconversion)
 endif()
 install(TARGETS filecrypter2 RUNTIME DESTINATION bin)
+
+include(CTest)
+if(BUILD_TESTING)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME cli_security COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli.py $<TARGET_FILE:filecrypter2>)
+endif()
