@@ -13,6 +13,9 @@ cmake --build build --config Release
 
 MIT licensed. OpenSSL is provided separately under its own license.
 
+Developer documentation: [DEVELOPMENT.md](DEVELOPMENT.md) explains the
+architecture, functions, CLI parameters, file format and development workflow.
+
 ## Build on each platform
 
 Linux (Debian/Ubuntu): install `build-essential cmake libssl-dev python3`.
